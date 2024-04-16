@@ -10,6 +10,7 @@ import os
 import xml.etree.ElementTree as ET
 import subprocess
 from pathlib import Path
+import itertools
 
 # import third-party libraries
 import numpy as np
@@ -19,6 +20,7 @@ from colour.utilities import tstack
 import icc_profile_xml_control as ipxc
 import icc_profile_calc_param as ipcp
 import color_space as cs
+import transfer_functions as tf
 
 # information
 __author__ = 'Toru Yoshihara'
@@ -63,11 +65,11 @@ def create_mhc_icc_profile(
     cprt_element = ipxc.get_cprt_element(root)
     cprt_element.text = cprt_str
 
-    # chad_mtx = ipcp.calc_chromatic_adaptation_matrix(
-    #     src_white=src_white, dst_white=ipcp.PCS_D50)
-    # chad_mtx_element = ipxc.get_chad_mtx_element(root)
-    # ipxc.set_chad_matrix_to_chad_mtx_element(
-    #     mtx=chad_mtx, chad_mtx_element=chad_mtx_element)
+    chad_mtx = ipcp.calc_chromatic_adaptation_matrix(
+        src_white=src_white, dst_white=ipcp.PCS_D50)
+    chad_mtx_element = ipxc.get_chad_mtx_element(root)
+    ipxc.set_chad_matrix_to_chad_mtx_element(
+        mtx=chad_mtx, chad_mtx_element=chad_mtx_element)
 
     lumi_element = ipxc.get_lumi_element(root)
     ipxc.set_lumi_params_to_element(
@@ -96,7 +98,9 @@ def create_mhc_icc_profile(
         matrix=calibration_matrix, luts=calibration_luts)
 
     tree.write(xml_fname, short_empty_elements=False)
-    subprocess.run(["iccFromXml", xml_fname, icc_fname])
+    command = "iccFromXml"
+    print(f"{command} {xml_fname} {icc_fname}")
+    subprocess.run([command, xml_fname, icc_fname])
 
 
 def parse_mhc2_data():
@@ -111,7 +115,7 @@ def parse_mhc2_data():
         print(f"{ii}, {raw_data[ii]}")
 
 
-def create_sample_identity_1dlut(num_of_sample):
+def create_sample_identity_1dlut(num_of_sample, gain=0.5):
     x = np.linspace(0, 1, num_of_sample)
     y = x
 
@@ -120,9 +124,18 @@ def create_sample_identity_1dlut(num_of_sample):
     return lut
 
 
+def create_gain_1dlut(num_of_sample, gain=0.5):
+    x = np.linspace(0, 1, num_of_sample)
+    linear = tf.eotf_to_luminance(x, tf.ST2084) * gain
+    y = tf.oetf_from_luminance(linear, tf.ST2084)
+
+    lut = tstack([y, y, y])
+
+    return lut
+
+
 def debug_func():
     # parse_mhc2_data()
-    luts = create_sample_identity_1dlut(num_of_sample=4)
 
     # # SDR BT.709
     # xml_fname = "./xml/BT709_MHC2_sample.xml"
@@ -199,23 +212,93 @@ def debug_func():
     #     max_full_frame_luminance=100,
     #     calibration_luts=luts)
 
-    # HDR BT.2020
-    xml_fname = "./xml/HDR_BT2020_MHC2_sample.xml"
-    icc_fname = "./icc/HDR_GM24_BT2020_MHC2_sample2-400-200nits.icm"
+    # # HDR BT.2020
+    # gain = 0.54
+    # peak_luminance = 450
+    # max_full_frame_luminance = 250
+    # calibration_matrix = np.identity(3)
+    # luminance_str = f"{peak_luminance}-{max_full_frame_luminance}"
+    # luts = create_gain_1dlut(num_of_sample=8, gain=gain)
+    # xml_fname = "./xml/MHC2_sample.xml"
+    # icc_fname = f"./icc/MHC2_{luminance_str}-nits_gain-0.54.icm"
+    # create_mhc_icc_profile(
+    #     gamma=2.4, src_white=cs.D65,
+    #     src_primaries=cs.get_primaries(cs.BT2020),
+    #     desc_str=str(Path(icc_fname).stem),
+    #     cprt_str="Copyright 2024 Toru Yoshihara",
+    #     min_luminance=0.005,
+    #     peak_luminance=peak_luminance,
+    #     max_full_frame_luminance=max_full_frame_luminance,
+    #     xml_fname=xml_fname,
+    #     icc_fname=icc_fname,
+    #     calibration_luts=luts,
+    #     calibration_matrix=calibration_matrix)
+    pass
+
+
+def create_mhc2_profile_with_gain(
+        gain=0.5, peak_luminance=450, max_full_frame_luminance=250):
+    calibration_matrix = np.identity(3)
+    luminance_str = f"{peak_luminance}-{max_full_frame_luminance}"
+    luts = create_gain_1dlut(num_of_sample=1024, gain=gain)
+    xml_fname = "./xml/MHC2_sample.xml"
+    icc_fname = f"./icc/MHC2_{luminance_str}-nits_gain-{gain:.2f}.icm"
     create_mhc_icc_profile(
         gamma=2.4, src_white=cs.D65,
         src_primaries=cs.get_primaries(cs.BT2020),
         desc_str=str(Path(icc_fname).stem),
         cprt_str="Copyright 2024 Toru Yoshihara",
-        min_luminance=0.005,
-        peak_luminance=400,
-        max_full_frame_luminance=200,
+        min_luminance=0.001,
+        peak_luminance=peak_luminance,
+        max_full_frame_luminance=max_full_frame_luminance,
         xml_fname=xml_fname,
         icc_fname=icc_fname,
-        calibration_luts=luts)
+        calibration_luts=luts,
+        calibration_matrix=calibration_matrix)
+
+
+def create_mhc2_profile_with_color_space(color_space=cs.BT2020):
+    gain = 0.54
+    peak_luminance = 450
+    max_full_frame_luminance = 250
+    calibration_matrix = np.identity(3)
+    luts = create_gain_1dlut(num_of_sample=8, gain=gain)
+    xml_fname = "./xml/MHC2_sample.xml"
+    icc_fname = f"./icc/MHC2_{color_space}_gain-0.54.icm"
+    create_mhc_icc_profile(
+        gamma=2.4, src_white=cs.D65,
+        src_primaries=cs.get_primaries(color_space),
+        desc_str=str(Path(icc_fname).stem),
+        cprt_str="Copyright 2024 Toru Yoshihara",
+        min_luminance=0.005,
+        peak_luminance=peak_luminance,
+        max_full_frame_luminance=max_full_frame_luminance,
+        xml_fname=xml_fname,
+        icc_fname=icc_fname,
+        calibration_luts=luts,
+        calibration_matrix=calibration_matrix)
 
 
 if __name__ == '__main__':
     os.chdir(os.path.dirname(os.path.abspath(__file__)))
     # main_func()
-    debug_func()
+    # debug_func()
+    create_mhc2_profile_with_gain()
+    # create_mhc2_profile_with_color_space(color_space=cs.BT2020)
+    # create_mhc2_profile_with_color_space(color_space=cs.BT709)
+    # create_mhc2_profile_with_color_space(color_space=cs.P3_D65)
+    gain_list = [1.0, 0.9, 0.8, 0.7, 0.6, 0.5, 0.4, 0.3, 0.2, 0.1]
+    # gain_list = [1.0]
+    # peak_full_luminance_pair_list = [
+    #     [1000, 1000], [1000, 600], [1000, 250],
+    #     [600, 600], [600, 250],
+    #     [450, 450], [450, 250]
+    # ]
+    peak_full_luminance_pair_list = [[10000, 10000]]
+    for gain in gain_list:
+        for peak_full_luminance_pair in peak_full_luminance_pair_list:
+            peak_luminance = peak_full_luminance_pair[0]
+            max_full_frame_luminance = peak_full_luminance_pair[1]
+            create_mhc2_profile_with_gain(
+                gain=gain, peak_luminance=peak_luminance,
+                max_full_frame_luminance=max_full_frame_luminance)
